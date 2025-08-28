@@ -1,0 +1,16 @@
+# virtual env
+.venv/
+__pycache__/
+*.pyc
+
+# Jupyter
+*.ipynb_checkpoints
+
+# Data & models
+data/*
+!data/sample/        # keep small samples
+model_artifacts/*
+results/*
+
+# envs
+.env
