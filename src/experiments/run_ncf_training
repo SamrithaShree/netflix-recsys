@@ -1,0 +1,110 @@
+import pandas as pd
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+from sklearn.model_selection import train_test_split
+from src.data.ncf_data import create_id_mappings, NetflixDataset
+from src.models.ncf_model import NCF
+from src.utils.metrics import batch_eval
+
+def train_epoch(model, dataloader, optimizer, criterion, device):
+    model.train()
+    running_loss = 0.0
+    for users, items, ratings in dataloader:
+        users, items, ratings = users.to(device), items.to(device), ratings.to(device)
+        optimizer.zero_grad()
+        outputs = model(users, items)
+        loss = criterion(outputs, ratings)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item() * users.size(0)
+    return running_loss / len(dataloader.dataset)
+
+def eval_epoch(model, dataloader, criterion, device):
+    model.eval()
+    running_loss = 0.0
+    with torch.no_grad():
+        for users, items, ratings in dataloader:
+            users, items, ratings = users.to(device), items.to(device), ratings.to(device)
+            outputs = model(users, items)
+            loss = criterion(outputs, ratings)
+            running_loss += loss.item() * users.size(0)
+    return running_loss / len(dataloader.dataset)
+
+def generate_top_n_recs(model, train_df, user2idx, item2idx, users, n=10, device="cpu"):
+    model.eval()
+    top_n = {}
+    all_items_set = set(item2idx.values())
+    with torch.no_grad():
+        for uid in users:
+            u_idx = user2idx[uid]
+            rated_items = set(train_df[train_df['userId'] == uid]['movieId'].map(item2idx))
+            to_predict = list(all_items_set - rated_items)
+            if not to_predict:
+                top_n[uid] = []
+                continue
+            user_tensor = torch.tensor([u_idx]*len(to_predict), dtype=torch.long).to(device)
+            items_tensor = torch.tensor(to_predict, dtype=torch.long).to(device)
+            scores = model(user_tensor, items_tensor)
+            top_indices = torch.topk(scores, n).indices
+            inv_item2idx = {v: k for k, v in item2idx.items()}
+            top_items = [inv_item2idx[to_predict[i.item()]] for i in top_indices]
+            top_n[uid] = top_items
+    return top_n
+
+def main():
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    full_train = pd.read_csv("data/processed/train.csv")
+    test = pd.read_csv("data/processed/test.csv")
+
+    user2idx, item2idx, idx2user, idx2item = create_id_mappings(full_train)
+
+    train_df, val_df = train_test_split(full_train, test_size=0.2, random_state=42, stratify=full_train["userId"])
+
+    train_dataset = NetflixDataset(train_df, user2idx, item2idx)
+    val_dataset = NetflixDataset(val_df, user2idx, item2idx)
+
+    best_val_loss = float('inf')
+    best_params = None
+    best_model = None
+
+    embedding_dims = [16, 32, 64]
+    learning_rates = [1e-3, 5e-4]
+    hidden_layer_configs = [[64, 32], [128, 64, 32]]
+
+    epochs = 5
+    batch_size = 1024
+
+    for emb_dim in embedding_dims:
+        for lr in learning_rates:
+            for hidden_layers in hidden_layer_configs:
+                print(f"Training NCF with embedding_dim={emb_dim}, lr={lr}, hidden_layers={hidden_layers}")
+                train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+                val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
+                model = NCF(len(user2idx), len(item2idx), embedding_dim=emb_dim, hidden_layers=hidden_layers).to(device)
+                optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+                criterion = nn.MSELoss()
+                for epoch in range(epochs):
+                    train_loss = train_epoch(model, train_loader, optimizer, criterion, device)
+                    val_loss = eval_epoch(model, val_loader, criterion, device)
+                    print(f"Epoch {epoch+1}/{epochs}: train_loss={train_loss:.4f}, val_loss={val_loss:.4f}")
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    best_params = (emb_dim, lr, hidden_layers)
+                    best_model = model
+    print(f"\nBest Validation Loss: {best_val_loss:.4f} with params: embedding_dim={best_params[0]}, lr={best_params[1]}, hidden_layers={best_params[2]}")
+
+    users = test["userId"].unique()
+    test_dict = test.groupby("userId")["movieId"].apply(list).to_dict()
+    top_n = generate_top_n_recs(best_model, full_train, user2idx, item2idx, users, n=10, device=device)
+
+    prec, recall, ndcg = batch_eval(users, test_dict, top_n, k=10)
+    print(f"NCF model test: Precision@10={prec:.4f} Recall@10={recall:.4f} NDCG@10={ndcg:.4f}")
+
+    torch.save(best_model.state_dict(), "model_artifacts/ncf_best.pth")
+    print("Best NCF model saved to model_artifacts/ncf_best.pth")
+
+
+if __name__ == "__main__":
+    main()
