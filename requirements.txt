@@ -6,6 +6,7 @@ scikit-learn
 seaborn
 matplotlib
 tqdm
+torch
 
 # Recommender system
 scikit-surprise
