@@ -2,7 +2,14 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y build-essential python3-dev
+# Install system dependencies Pillow and other libraries need, including libjpeg
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    libjpeg-dev \
+    zlib1g-dev \
+    libpng-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 
