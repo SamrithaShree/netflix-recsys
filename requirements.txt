@@ -1,26 +1,5 @@
-# Core data science
-numpy
-pandas
-scipy
-scikit-learn
-seaborn
-matplotlib
-tqdm
-torch
-
-# Recommender system
-scikit-surprise
-
-# API & serving
-fastapi
-uvicorn
-
-# Experimentation & Notebooks
-jupyter
-ipykernel
-
-# Testing
-pytest
-
-# Kaggle API (to fetch datasets)
-kaggle
+fastapi==0.95.2
+uvicorn[standard]==0.23.1
+pandas==1.5.3
+scikit-surprise==1.1.4
+torch==2.0.1
